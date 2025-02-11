@@ -1,24 +1,11 @@
-# Copyright (c) HashiCorp, Inc.
-# SPDX-License-Identifier: MPL-2.0
+
 
 provider "aws" {
   region = var.aws_region
-
-  default_tags {
-    tags = {
-      hashicorp-learn = "lambda-api-gateway"
-    }
-  }
-
-}
-
-resource "random_pet" "lambda_bucket_name" {
-  prefix = "learn-terraform-functions"
-  length = 4
 }
 
 resource "aws_s3_bucket" "lambda_bucket" {
-  bucket = random_pet.lambda_bucket_name.id
+  bucket = "lambda-web-app-87659zsdefr"
 }
 
 resource "aws_s3_bucket_ownership_controls" "lambda_bucket" {
@@ -139,6 +126,8 @@ resource "aws_apigatewayv2_route" "hello_world" {
 
   route_key = "GET /hello"
   target    = "integrations/${aws_apigatewayv2_integration.hello_world.id}"
+  authorization_type = "JWT"
+  authorizer_id = aws_apigatewayv2_authorizer.cognito.id
 }
 
 resource "aws_cloudwatch_log_group" "api_gw" {
@@ -154,5 +143,65 @@ resource "aws_lambda_permission" "api_gw" {
   principal     = "apigateway.amazonaws.com"
 
   source_arn = "${aws_apigatewayv2_api.lambda.execution_arn}/*/*"
+}
+
+
+resource "aws_cognito_user_pool" "this" {
+  name = "my-user-pool"
+
+  admin_create_user_config {
+    allow_admin_create_user_only = false
+  }
+
+  auto_verified_attributes = ["email"]
+
+  schema {
+    attribute_data_type = "String"
+    name               = "email"
+    required           = true
+  }
+}
+
+
+
+
+resource "aws_cognito_user_pool_client" "this" {
+  name            = "my-app-client"
+  user_pool_id    = aws_cognito_user_pool.this.id
+  generate_secret = false  # Set to true if using a confidential client
+
+  explicit_auth_flows = [
+    "ALLOW_REFRESH_TOKEN_AUTH",
+    "ALLOW_USER_SRP_AUTH",
+    "ALLOW_ADMIN_USER_PASSWORD_AUTH"
+  ]
+
+  callback_urls = ["${aws_apigatewayv2_stage.lambda.invoke_url}/hello"]
+  supported_identity_providers = ["COGNITO"] 
+
+  allowed_oauth_flows = ["implicit", "code"]
+  allowed_oauth_scopes = ["openid", "email", "profile", "aws.cognito.signin.user.admin"]
+  allowed_oauth_flows_user_pool_client = true
+}
+
+
+
+resource "aws_apigatewayv2_authorizer" "cognito" {
+  api_id           = aws_apigatewayv2_api.lambda.id
+  name             = "cognito-authorizer"
+  authorizer_type  = "JWT"
+
+  identity_sources = ["$request.header.Authorization"]
+
+  jwt_configuration {
+    audience = [aws_cognito_user_pool_client.this.id]
+    issuer   = "https://${aws_cognito_user_pool.this.endpoint}"
+  }
+}
+
+
+resource "aws_cognito_user_pool_domain" "this" {
+  domain       = "my-custom-domain"
+  user_pool_id = aws_cognito_user_pool.this.id
 }
 
